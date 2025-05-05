@@ -76,6 +76,8 @@ import org.wso2.carbon.metrics.manager.Level;
 import org.wso2.carbon.metrics.manager.MetricManager;
 import org.wso2.carbon.metrics.manager.Timer;
 
+import java.io.IOException;
+import java.net.UnknownHostException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -141,6 +143,8 @@ public class ThrottleHandler extends AbstractHandler implements ManagedLifecycle
     private String sandboxMaxCompletionTokenCount;
     private String sandboxMaxTotalTokenCount;
     private RoleBasedAccessRateController roleBasedAccessController;
+
+    private RiakCounter riakCounter;
 
     public ThrottleHandler() {
         if (log.isDebugEnabled()) {
@@ -1171,6 +1175,16 @@ public class ThrottleHandler extends AbstractHandler implements ManagedLifecycle
                 }
 
             }
+
+            // initialize the riak distributed counter
+            try {
+                riakCounter = new RiakCounter(60000, 1000, 100, true); // hard coded config
+                riakCounter.addHosts("10.8.0.4", "10.8.0.5", "10.8.0.6", "10.8.0.8");
+                riakCounter.initRiak();
+                log.info("Riak Counter initialized: " + riakCounter);
+            } catch (UnknownHostException exception) {
+                log.error("Error occurred while initializing Riak Distributed Counter");
+            }
         }
     }
 
@@ -1536,6 +1550,20 @@ public class ThrottleHandler extends AbstractHandler implements ManagedLifecycle
      */
     private boolean isAccessBlocked(MessageContext synCtx, String throttleKey,
                                     String throttleLimit, Long tokenCount) throws ThrottleException {
+        // increment the counter using riak client
+        long throttleLimitValue = APIThrottleConstants.PRODUCTION_HARD_LIMIT.equals(throttleLimit)
+                ? Long.parseLong(productionMaxCount) : Long.parseLong(sandboxMaxCount);
+        try {
+            long updatedThrottleCount = riakCounter.incrementThrottlingCounter(throttleKey, tokenCount);
+            if (updatedThrottleCount > throttleLimitValue) {
+                synCtx.setProperty(APIThrottleConstants.THROTTLED_OUT_REASON, APIThrottleConstants.HARD_LIMIT_EXCEEDED);
+                return true;
+            }
+            return false;
+        } catch (Exception e) {
+            log.error("failed to increment the counter: " + throttleKey + " -- " + e.getMessage());
+        }
+
         ThrottleContext hardThrottleContext = throttleMap.get(throttleLimit).getThrottleContext(throttleLimit);
         hardThrottleContext.setThrottleId(id + throttleLimit);
         hardThrottleContext.setConfigurationContext(((Axis2MessageContext) synCtx).getAxis2MessageContext()
@@ -1694,6 +1722,11 @@ public class ThrottleHandler extends AbstractHandler implements ManagedLifecycle
     
 
     public void destroy() {
-
+        log.info("shutting down the riak counter: " + riakCounter.toString());
+        try {
+            riakCounter.shutdown();
+        } catch (IOException exception) {
+            log.error("error while shutdown riak counter: " + exception.getMessage());
+        }
     }
 }
