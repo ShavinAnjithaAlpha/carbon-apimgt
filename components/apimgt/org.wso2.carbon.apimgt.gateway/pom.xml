@@ -333,6 +333,13 @@
             <groupId>org.wso2.carbon</groupId>
             <artifactId>org.wso2.carbon.logging.correlation</artifactId>
         </dependency>
+
+        <!-- https://mvnrepository.com/artifact/com.basho.riak/riak-client -->
+        <dependency>
+            <groupId>com.basho.riak</groupId>
+            <artifactId>riak-client</artifactId>
+            <version>2.1.1</version>
+        </dependency>
     </dependencies>
 
     <build>
